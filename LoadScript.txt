@@ -10,6 +10,9 @@ SET TimestampFormat='DD/MM/YYYY hh:mm:ss[.fff] TT';
 SET MonthNames='Jan;Feb;Mar;Apr;May;Jun;Jul;Aug;Sep;Oct;Nov;Dec';
 SET DayNames='Mon;Tue;Wed;Thu;Fri;Sat;Sun';
 //-------------------------------------------------------------------
+// Adding a few lines of code to be compared with the original script for testing purposes
+
+Set errormode = 2;
 
 SET ThousandSep			=',';
 SET DecimalSep			='.';
