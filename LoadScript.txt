@@ -1,0 +1,417 @@
+﻿///$tab Main
+SET ThousandSep=' ';
+SET DecimalSep=',';
+SET MoneyThousandSep=' ';
+SET MoneyDecimalSep=',';
+SET MoneyFormat='R # ##0,00;-R # ##0,00';
+SET TimeFormat='hh:mm:ss TT';
+SET DateFormat='DD/MM/YYYY';
+SET TimestampFormat='DD/MM/YYYY hh:mm:ss[.fff] TT';
+SET MonthNames='Jan;Feb;Mar;Apr;May;Jun;Jul;Aug;Sep;Oct;Nov;Dec';
+SET DayNames='Mon;Tue;Wed;Thu;Fri;Sat;Sun';
+//-------------------------------------------------------------------
+
+SET ThousandSep			=',';
+SET DecimalSep			='.';
+SET MoneyThousandSep	=',';
+SET MoneyDecimalSep		='.';
+SET MoneyFormat			='R#,##0.00;-R#,##0.00';
+SET TimeFormat			='hh:mm:ss';
+SET DateFormat			='DD/MM/YYYY';
+SET TimestampFormat 	= 'YYYY-MM-DD hh:mm:ss';	
+SET TimestampFormat2 	= 'MM/DD/YYYY hh:mm:ss TT';	
+SET TimestampFormat1 	= 'DD/MM/YYYY hh:mm:ss TT';	
+SET TimestampFormat3 	= 'YYYY-MM-DDThh:mm:ss';	
+LET vTracePublisherTimestampMsg = 'Default Timestamp which will be used is: $(TimestampFormat).';
+SET MonthNames			='Jan;Feb;Mar;Apr;May;Jun;Jul;Aug;Sep;Oct;Nov;Dec';
+SET DayNames			='Mon;Tue;Wed;Thu;Fri;Sat;Sun';
+SET LongMonthNames		='January;February;March;April;May;June;July;August;September;October;November;December';
+SET LongDayNames		='Monday;Tuesday;Wednesday;Thursday;Friday;Saturday;Sunday';
+SET FirstWeekDay		=0;
+SET BrokenWeeks			=0;
+SET ReferenceDay		=4;
+SET FirstMonthOfYear	=1;
+SET CollationLocale		='en-GB';
+SET HidePrefix 			= '%';
+
+//----- Reload Stats	-----------------------
+LET ReloadStart		 		= now(1);
+LET ReloadStartDateNum		= floor(now(1));
+LET ReloadDurationPrior 	= ReloadDuration;
+
+Let comp 					= ComputerName(); 
+LET ProdVer 				= purgechar(QlikViewVersion(),chr(39));
+TRACE $(startMsg);
+//---------------------------------------------
+
+if '$(INPUTFIELD)'='Y' then
+	INPUTFIELD [Expected Users];
+	set vTarget = "=if(getpossiblecount([Target Off])=1,[Target Off],'No')";
+else 
+	set vTarget = "=if(getpossiblecount([Target Off])=1,[Target Off],'Yes')";
+endif;
+
+Let Timestamp_field 		= 'Timestamp( $(ts_modifier) ([Timestamp]))';
+Let SessionStart_field		= 'Timestamp( $(ts_modifier) ([Session Start]))';
+Let DocumentTimestamp_field	= 'Timestamp( $(ts_modifier) ([Document Timestamp]))';
+///$tab Variables
+$(Must_Include=..\Include\path_variables.txt);
+$(Must_Include=..\Include\colour_variables.txt);
+$(Must_Include=..\Include\other_vars.txt);
+$(Must_Include=..\Include\XMLDateFormat.txt);
+
+//Global Variables
+LET cWWBusAreaColour = cWWBlue;			//NB: Set Business Area Colour
+LET vUser = subfield(OSUser(),'\',2);	//Logged in User
+LET vLastRefreshTime = Now();			//Last data Refresh
+LET vLoadStartTime = Now();
+
+SET vMenuSelection = 'HOME';
+SET vHelpDisplay = 0;
+
+//Custom Variables
+LET vSelectedYear=Year(Today());
+
+SET vProdConnection = '\\qlikview01\Qlikview\';
+SET vQAConnection = '\\qlikviewqa01\Qlikview\';
+SET vDEVConnection = '\\qlikviewdev01\Qlikview\';
+
+////=== Example of User Config script  ===////
+LET vInputProfilePath				= '';	// blank path is the default
+LET vInputSessionPath				= '\\Qlikview01\Qlikview\QVData\QVS Logs | \\Qlikview02\Qlikview\QVData\QVS Logs | \\Qlikview02\Qlikview\QVData\QVS Logs';
+LET vInputPGOPath					= '\\Qlikview01\Qlikview\PGO | \\Qlikview02\Qlikview\PGO | \\Qlikview02\Qlikview\PGO';
+LET vInputMonthsOfHistory			= 12;		// Default = 12
+LET vInputDaysOfHeatmapHistory		= 30;		// Default = 30
+///$tab Ready
+if not index(upper(right('$(SESSION LOG PATH)',3)),'LOG') then
+	trace Please give a location for the Session log in Settings sheet;
+	exit script;
+endif;
+
+let zSLPath = left('$(SESSION LOG PATH)',index('$(SESSION LOG PATH)','\',-1));
+trace Reading SESSION LOG files from $(zSLPath);
+
+let zYYYYMM = year(today())*12+month(today());
+let zYYYYPM = year(addmonths(today(),-1))*12+month(addmonths(today(),-1));
+
+for each z in filelist('$(zSLPath)\SESSION*.log*')
+	let zFT = year(FileTime('$(z)'))*12+month(FileTime('$(z)')); //file functions work on the file being inspected by View
+	let z3 = floor(zFT/12)*100 + mod(zFT,12);
+	let zIsQVD = 'Needed';
+	for each z1 in filelist('$(QVD PATH)\SESSIONS_$(z3).qvd')
+		let zIsQVD = 'Exists';
+	next z1;
+	
+	
+DIRLISTING:
+	load
+		'$(z)' as LOGFILE,
+		'$(zFT)' as YMFILE,
+		'$(zIsQVD)' as ISQVD
+	autogenerate(1);
+next z //Used in FOR tab
+
+///$tab For
+for zYM = 1 to FieldValueCount('YMFILE')
+if len('$(QVD PATH)') > 2 then //QVDs are used - load missing months or rolling two months
+	LOADTHESE:
+	load
+		LOGFILE as LOADFILE
+	resident DIRLISTING
+		where YMFILE = fieldvalue('YMFILE',$(zYM))
+			and (ISQVD='Needed' or YMFILE = $(zYYYYMM) or YMFILE = $(zYYYYPM));  //Missing QVD + This month and last month logs
+else //No QVD means load 12 months only
+	LOADTHESE:
+	load
+		LOGFILE as LOADFILE
+	resident DIRLISTING
+		where YMFILE = fieldvalue('YMFILE',$(zYM)) 
+			and YMFILE >= $(zYYYYMM) - 12;
+endif;
+
+if FieldValueCount('LOADFILE') > 0 then //endif is on NEXT tab
+//debug - store LOADTHESE into LOADTHESE$(zYM).qvd (QVD);
+
+for z1 = 1 to FieldValueCount('LOADFILE')
+
+let z = fieldvalue('LOADFILE',z1); //Fetch log file to load
+
+///$tab Session logs
+SESSIONS: //Keep in sync with LogInfo 
+LOAD 
+	FileBaseName() as [File Sessions],
+	timestamp(timestamp#(Timestamp)) as [Session End],
+	Document,
+	[QlikView User],
+	timestamp(timestamp#([Session Start])) as [Session Start],
+	round(([Bytes Received]+[Bytes Sent])/1024,0.001) as [IO KB], 
+	round([Session Duration],0.000001) as [Duration],
+	upper(if(index(Document,'/')
+	,subfield(Document,'/',-1)
+	,subfield(Document,'\',-1))) as AppTMP,
+	num(Selections) as Selections,
+	[Authenticated user], 
+	[Identifying user], 
+	upper(if(len([Authenticated user])>3,[Authenticated user]
+	,if(len([QlikView User])>3,[QlikView User]
+	,if(len([Identifying user])>3,[Identifying user],'Unknown')))) as UserKey, //User,
+	[Client Type], 
+	[Client Build Version], 
+	[Server Port], 
+	[Client Address], 
+	[Client Port], 
+	[Cal Type], 
+	1 as [Count Session],
+	1 							as Session_Start_Count,
+	hour([Session Start]) 		as SessionHour,
+	if(len([Authenticated user])>0,lower([Authenticated user]),'Anonymous') as Authenticated_User,
+	num(Selections) 					as SessionSelections,
+	'$(tmp_node)'&'|' & round(num($(Timestamp_field)),0.001) as Node_TS	 
+FROM [$(z)]
+(txt, utf8, embedded labels, delimiter is '\t', no quotes);
+
+///$tab Next
+next z1;
+
+if len('$(QVD PATH)') > 2 then //Record History to this folder
+	let z3 = floor(fieldvalue('YMFILE',$(zYM))/12)*100 + mod(fieldvalue('YMFILE',$(zYM)),12);
+	let z2 = '$(QVD PATH)\SESSIONS_$(z3).qvd';
+	store SESSIONS into [$(z2)] (QVD);
+	drop table SESSIONS;
+endif;
+
+drop table LOADTHESE;
+
+endif; //Stops the z1 loop when there are no LOADFILE entries
+
+next zYM;
+
+if len('$(QVD PATH)') > 2 then	//Load from QVD
+	trace Load available History;
+	SESSIONS: load * from [$(QVD PATH)\SESSIONS_*.qvd] (QVD);
+endif;
+///$tab ETL
+SESSIONSNEW:
+load *,
+	AppTMP as App//,
+	,AppTMP & '-' & UserKey as DocCalKeyCounter
+	,date(floor([Session Start])) as Date
+	,date(Monthend([Session Start]),'YYYYMM') as DateYM
+	,Timestamp ([Session Start], 'YYYY-MM-DD hh:mm') as Date_2
+	,date(floor([Session End])) as Date_End
+	,Timestamp ([Session End], 'YYYY-MM-DD hh:mm') as Date_End_2
+	,year([Session Start]) as Year
+	,year([Session Start])*12+month([Session Start]) as YM
+	,month([Session Start]) as Month
+	,week([Session Start]) as Week,
+	WeekDay([Session Start]) as DoW,
+	day([Session Start]) as Day
+resident SESSIONS;
+
+drop table SESSIONS;
+
+
+drop field AppTMP,
+	 [Session Start],
+	 [Session End],
+	 Document,
+     [Authenticated user], 
+     [Identifying user], 
+     [Client Type], 
+     [Client Build Version], 
+     [Server Port], 
+     [Client Address], 
+     [Client Port]
+;
+
+///$tab CALINFO
+// Start of [IniData.pgo.xml] LOAD statements
+IniDataEntry:
+LOAD Name as [QVS Setting],
+    Value as [QVS Value]
+FROM [$(zXMLPath)\IniData.pgo.xml] (XmlSimple, Table is [IniData/Entries/IniDataEntry]);
+// End of [IniData.pgo.xml] LOAD statements
+
+CalData:
+LOAD 
+    [LefCalInfo/Uncapped] as Uncapped,
+    if([LefCalInfo/NoOfSessionCals]<0,0,[LefCalInfo/NoOfSessionCals]) as [CAL Sessions],
+    if([LefCalInfo/NoOfUsageCals]<0,0,[LefCalInfo/NoOfUsageCals]) as [CAL Usage],
+    if([LefCalInfo/NoOfNamedCals]<0,0,[LefCalInfo/NoOfNamedCals]) as [CAL Named],
+    [LefCalInfo/NoOfClusterNodes] as Nodes,
+    if([LefCalInfo/NoOfDocumentCals]<0,0,[LefCalInfo/NoOfDocumentCals]) as [CAL Document]
+FROM [$(zXMLPath)CalData.pgo.xml] (XmlSimple, Table is [CalData]);
+// End of [CalData.pgo.xml] LOAD statements
+
+set errormode=0;
+
+DocCalAllocEntry: //'PerDocumentCalData/NamedCalsAllocated/CalAllocEntry':
+LOAD 
+	upper(Name) as UserKey,
+	upper(Name) & '-' & %Key_PerDocumentCalData_71E03D5A91FA7462 as Licensee,
+	'Document' as [CAL Alloc],
+    %Key_PerDocumentCalData_71E03D5A91FA7462    // Key to parent table: CalData/PerDocumentCalData/PerDocumentCalData
+FROM [$(zXMLPath)CalData.pgo.xml] (XmlSimple, Table is [CalData/PerDocumentCalData/PerDocumentCalData/NamedCalsAllocated/CalAllocEntry]);
+
+
+//DocumentCalDetails:
+inner Join (DocCalAllocEntry)
+LOAD 
+	(SubField(replace(DocumentName,'/','\'),'\',-1)) as App,
+    %Key_PerDocumentCalData_71E03D5A91FA7462    // Key for this table: CalData/PerDocumentCalData/PerDocumentCalData
+FROM [$(zXMLPath)CalData.pgo.xml] (XmlSimple, Table is [CalData/PerDocumentCalData/PerDocumentCalData]);
+
+RENAME TABLE DocCalAllocEntry TO CalAllocEntry;
+
+// Start of [CalData.pgo.xml] LOAD statements
+Concatenate (CalAllocEntry)
+LOAD 
+	upper(Name) as UserKey,
+	upper(Name) as Licensee,
+	'Named' as [CAL Alloc]
+FROM [$(zXMLPath)CalData.pgo.xml] (XmlSimple, Table is [CalData/NamedCalsAllocated/CalAllocEntry]);
+
+// Start of [BorrowedCalData.pgo.xml] LOAD statements
+BorrowedCalEntry:
+LOAD upper(UserName) as UserKey,
+    MachineId,
+    UtcBorrowTime,
+    date(floor($(eConvertHexToDec(UtcBorrowTime)))) as UtcBorrowTime_2
+FROM [$(zXMLPath)\BorrowedCalData.pgo.xml] (XmlSimple, Table is [BorrowedCalData/Entries/BorrowedCalEntry]);
+// End of [BorrowedCalData.pgo.xml] LOAD statements
+
+set errormode=1;
+
+if len('$(QVD PATH)') > 2 then //Record closing CAL situation each month
+	let z3 = floor(zYYYYMM/12)*100 + mod(zYYYYMM,12);
+	store CalData into [$(QVD PATH)\CalData_$(z3).qvd] (QVD);
+	store CalAllocEntry into [$(QVD PATH)\CalAllocEntry_$(z3).qvd] (QVD);
+	store DocumentCalData into [$(QVD PATH)\DocumentCalData_$(z3).qvd] (QVD);
+	store DocCalAllocEntry into [$(QVD PATH)\DocCalAllocEntry_$(z3).qvd] (QVD);
+endif;
+///$tab Active Directory
+//Qaadir - 25/06/2018 -  AD was used to determine the correct display name and description which was the job role but this is not accurate and being dropped at the end of the script again till information is cleaned up
+
+CONNECT TO [Provider=ADsDSOObject;Encrypt Password=False;Data Source=LDAP://woolworths.co.za:389;Mode=Read];
+
+set values='E,A';
+let valuecount = SubStringCount(values,',');
+for i = 1 to valuecount + 1
+let value = subfield(values,',', i) & '*';
+
+[ADUsers]:
+LOAD
+sAMAccountName as UserKey,//'User', 
+displayName, 
+description;
+SQL SELECT 
+sAMAccountName, 
+displayName, 
+description
+from 'LDAP://woolworths.co.za:389' 
+where objectClass = 'User' and objectCategory = 'Person' and (sAMAccountName = 'e*' or sAMAccountName = 'a*');
+
+
+///$tab LicAllocation
+Summary:
+LOAD 
+     [Business Unit], 
+     [Product / Service] as [Amended BEE Product / Service], 
+     [Named CALs Allocated], 
+     [DOC CALs Allocated]
+FROM
+$(vLogPath)QlikView CALs Master List.xlsx
+(ooxml, embedded labels, table is Summary);
+
+
+///$tab MasterLIst
+//Qaadir - 25/06/2018 - Admins captured a user multiple times to indicate multiple docment licences instead of just adding a collumn 
+
+MasterEmployees:
+LOAD 
+	UserKey, 
+	LASTVALUE(QlikName) as QlikName, 
+	LASTVALUE(WWUID) as WWUID, 
+	LASTVALUE([Last Used]) as [Last Used], 
+	LASTVALUE(TERMINATION_DATE) as TERMINATION_DATE, 
+	LASTVALUE([BEE Product / Service]) as [BEE Product / Service], 
+	LASTVALUE(Department) as Department, 
+	LASTVALUE([Amended BEE Product / Service]) as [Amended BEE Product / Service], 
+	LASTVALUE(Notes) as Notes
+FROM
+$(vLogPath)QlikView CALs Master List.xlsx
+(ooxml, embedded labels, table is Sheet1)
+group by UserKey;
+///$tab Employee Details
+left Join (MasterEmployees)
+LOAD 'WOOLWORTHS\W' & [EmpIDKey] as UserKey, 
+     lastvalue([Job Descritpion]) as [Job Descritpion]
+FROM
+$(vLogPath)BU_DEPT_TBL.qvd(qvd)
+Group by 'WOOLWORTHS\W' & [EmpIDKey];
+
+right join (MasterEmployees) 
+load
+	UserKey,
+	[CAL Alloc],
+	Licensee,
+	App as DocName
+Resident CalAllocEntry;
+
+Drop Table CalAllocEntry;
+
+
+///$tab Definitions
+//External spreadhseet being used to capture definitions 
+
+Definitions:
+LOAD 
+	A as SortOrder, 
+	B as DefName, 
+	D as DefDescription
+FROM
+$(vLogPath)Definitions.xlsx
+(ooxml, no labels, table is Definitions);
+
+///$tab Drop Stuff
+DROP FIELD
+[Authenticated_User],
+[BEE Product / Service],
+[CAL Document],
+[CAL Named],
+[CAL Sessions],
+[CAL Usage],
+[DateYM],
+[Date_2],
+[Date_End],
+[Date_End_2],
+[Day],
+[Department],
+[DoW],
+[DocName],
+[File Sessions],
+[IO KB],
+[Last Used],
+[MachineId],
+[Node_TS],
+[Nodes],
+[Notes],
+[QlikView User],
+[SessionHour],
+[SessionSelections],
+[Session_Start_Count],
+[TERMINATION_DATE],
+[Uncapped],
+[UtcBorrowTime],
+[UtcBorrowTime_2],
+[WWUID],
+[description],
+YM,
+[displayName];
+
+
+drop tables IniDataEntry, DIRLISTING, ADUsers, BorrowedCalEntry;
+///$tab End
+Set vLoadEndTime = Now();
+
+Exit Script;
